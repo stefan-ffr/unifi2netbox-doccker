@@ -1,0 +1,98 @@
+name: Build and Push Docker Image
+
+on:
+  # Manueller Trigger
+  workflow_dispatch:
+  
+  # Zeitgesteuerter Check auf Updates (täglich um 2 Uhr)
+  schedule:
+    - cron: '0 2 * * *'
+  
+  # Bei Push auf main branch
+  push:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/**'
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      should-build: ${{ steps.check.outputs.should-build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for upstream changes
+        id: check
+        run: |
+          # Hole den letzten Commit vom Original-Repo
+          UPSTREAM_COMMIT=$(git ls-remote https://github.com/mrzepa/unifi2netbox.git HEAD | cut -f1)
+          
+          # Prüfe ob wir diesen Commit schon gebaut haben
+          if git tag | grep -q "upstream-${UPSTREAM_COMMIT}"; then
+            echo "should-build=false" >> $GITHUB_OUTPUT
+            echo "No new upstream changes"
+          else
+            echo "should-build=true" >> $GITHUB_OUTPUT
+            echo "New upstream commit: ${UPSTREAM_COMMIT}"
+            echo "UPSTREAM_COMMIT=${UPSTREAM_COMMIT}" >> $GITHUB_ENV
+          fi
+
+  build-and-push:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should-build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get upstream commit
+        id: upstream
+        run: |
+          UPSTREAM_COMMIT=$(git ls-remote https://github.com/mrzepa/unifi2netbox.git HEAD | cut -f1)
+          UPSTREAM_SHORT=$(echo ${UPSTREAM_COMMIT} | cut -c1-7)
+          echo "commit=${UPSTREAM_COMMIT}" >> $GITHUB_OUTPUT
+          echo "short=${UPSTREAM_SHORT}" >> $GITHUB_OUTPUT
+          echo "date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/unifi2netbox:latest
+            ghcr.io/${{ github.repository_owner }}/unifi2netbox:${{ steps.upstream.outputs.date }}
+            ghcr.io/${{ github.repository_owner }}/unifi2netbox:${{ steps.upstream.outputs.short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tag upstream commit
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag "upstream-${{ steps.upstream.outputs.commit }}"
+          git push origin "upstream-${{ steps.upstream.outputs.commit }}"
