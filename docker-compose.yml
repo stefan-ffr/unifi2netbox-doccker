@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  unifi2netbox:
+    build: .
+    container_name: unifi2netbox
+    environment:
+      - UNIFI_HOST=your-unifi-controller.example.com
+      - UNIFI_PORT=8443
+      - UNIFI_USER=your-username
+      - UNIFI_PASSWORD=your-password
+      - NETBOX_URL=https://netbox.example.com
+      - NETBOX_TOKEN=your-netbox-api-token
+    volumes:
+      - ./config:/app/config
+    restart: unless-stopped
+    # Falls du es als Cronjob laufen lassen möchtest
+    # command: sh -c "while true; do python unifi2netbox.py; sleep 3600; done"
